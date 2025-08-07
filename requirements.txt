@@ -1,0 +1,8 @@
+flask
+pandas
+numpy
+matplotlib
+seaborn
+requests
+scikit-learn
+lxml
