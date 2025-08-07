@@ -1,19 +1,19 @@
-import matplotlib
-matplotlib.use("Agg")  # Use non-GUI backend for plotting (needed for Mac)
-
+import os
 import base64
 import io
 import re
 from flask import Flask, request, jsonify
 import pandas as pd
 import numpy as np
+import matplotlib
+matplotlib.use("Agg")  # Use non-GUI backend for plotting (needed on servers/mac)
 import matplotlib.pyplot as plt
 import seaborn as sns
 
 app = Flask(__name__)
 
 def extract_url(text):
-    """Extract the first URL found in the text (if any)."""
+    """Extract the first URL found in the provided text."""
     match = re.search(r'https?://[^\s]+', text)
     return match.group(0) if match else None
 
@@ -27,16 +27,12 @@ def try_scrape_table(url):
         pass
     return None
 
-def clean_numeric_series(s):
-    """Safely convert a pandas Series to numeric, coercing errors to NaN."""
-    return pd.to_numeric(s, errors='coerce')
-
 def get_numeric_cols(df):
-    """Return a list of numeric columns in the dataframe."""
+    """Return list of numeric-type columns in the dataframe."""
     return df.select_dtypes(include=[np.number]).columns.tolist()
 
 def correlation_answer(df):
-    """Compute correlation between the first two numeric columns if possible."""
+    """Calculate correlation between first two numeric columns if possible."""
     cols = get_numeric_cols(df)
     if len(cols) < 2:
         return "NaN"
@@ -46,7 +42,7 @@ def correlation_answer(df):
     return round(float(corr), 6)
 
 def regression_slope(df):
-    """Calculate linear regression slope between the first two numeric columns."""
+    """Calculate simple linear regression slope between first two numeric columns."""
     from sklearn.linear_model import LinearRegression
     cols = get_numeric_cols(df)
     if len(cols) < 2:
@@ -64,7 +60,7 @@ def regression_slope(df):
         return "NaN"
 
 def plot_scatter_with_regression(df):
-    """Create a scatterplot with a red dotted regression line and return base64 image URI."""
+    """Create scatterplot with dotted red regression line, return base64 PNG URI."""
     cols = get_numeric_cols(df)
     if len(cols) < 2:
         return "No plot data"
@@ -83,20 +79,20 @@ def plot_scatter_with_regression(df):
     img_bytes.seek(0)
     img_b64 = base64.b64encode(img_bytes.read()).decode()
     uri = f"data:image/png;base64,{img_b64}"
-    # Ensure size < 100,000 bytes (characters)
+    # Ensure size is less than 100,000 characters
     if len(uri) > 100000:
         return "Plot too large"
     return uri
 
 @app.route('/api/', methods=['POST'])
 def handle_api():
-    # Require questions.txt file
+    # Ensure 'questions.txt' is present
     if 'questions.txt' not in request.files:
         return jsonify({'error': 'questions.txt file is required'}), 400
 
     questions_text = request.files['questions.txt'].read().decode()
 
-    # Extract URL if present
+    # Extract a URL to scrape if present
     url = extract_url(questions_text)
 
     df = None
@@ -106,7 +102,7 @@ def handle_api():
     if df is None or (hasattr(df, "empty") and df.empty):
         return jsonify(["No data found to analyze"])
 
-    # Parse questions by simple splitting on newlines and dots
+    # Split questions by newlines and periods, then strip
     questions = [q.strip() for q in re.split(r'[\n\.]+', questions_text) if q.strip()]
 
     answers = []
@@ -121,11 +117,11 @@ def handle_api():
         elif "count" in q_lower:
             answers.append(str(len(df)))
         else:
-            # For other unknown questions, respond gracefully
+            # For unknown or unsupported questions, respond gracefully
             answers.append("Cannot answer")
 
-    # Return JSON array of answers
     return jsonify(answers)
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5001)
+    port = int(os.environ.get("PORT", 5001))
+    app.run(host="0.0.0.0", port=port)
