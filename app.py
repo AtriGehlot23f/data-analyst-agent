@@ -10,14 +10,18 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import seaborn as sns
 
-# For network analysis
 import networkx as nx
 from datetime import datetime
 
 app = Flask(__name__)
 
+# Health check route for debugging
+@app.route('/')
+def health():
+    return "Flask API running!"
+
 def load_input_file(files, filename_hint=None):
-    """Load the appropriate data file (csv, json, parquet) for analysis."""
+    """Smart file loader: picks by hint or first data file found."""
     if filename_hint:
         for field in files:
             if filename_hint.lower() in field.lower():
@@ -217,7 +221,7 @@ def handle_api():
             "precip_histogram": precip_hist_b64
         })
 
-    # FALLBACK FOR URL SCRAPING ETC
+    # FALLBACK
     url = re.search(r'https?://[^\s]+', questions_text)
     df = None
     if url:
@@ -264,7 +268,7 @@ def regression_slope(df):
     cols = get_numeric_cols(df)
     if len(cols) < 2:
         return "NaN"
-    df_clean = df[[cols, cols[1]]].dropna()
+    df_clean = df[[cols[0], cols[1]]].dropna()
     if df_clean.empty:
         return "NaN"
     try:
@@ -280,7 +284,7 @@ def plot_scatter_with_regression(df):
     cols = get_numeric_cols(df)
     if len(cols) < 2:
         return "No plot data"
-    df_clean = df[[cols, cols[1]]].dropna()
+    df_clean = df[[cols[0], cols[1]]].dropna()
     if df_clean.empty:
         return "No plot data"
     fig, ax = plt.subplots()
@@ -300,5 +304,6 @@ def plot_scatter_with_regression(df):
     return uri
 
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5001))
+    # Always use the port given by the host environment
+    port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
