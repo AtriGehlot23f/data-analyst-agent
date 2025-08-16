@@ -11,37 +11,35 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 
 import networkx as nx
-from datetime import datetime
 
 app = Flask(__name__)
 
-# Health check route for debugging
 @app.route('/')
 def health():
     return "Flask API running!"
 
 def load_input_file(files, filename_hint=None):
-    """Smart file loader: picks by hint or first data file found."""
+    """Load the attached CSV/JSON/Parquet file, optionally by hint."""
     if filename_hint:
         for field in files:
             if filename_hint.lower() in field.lower():
-                file = files[field]
+                f = files[field]
                 if field.lower().endswith(".csv"):
-                    return pd.read_csv(file)
+                    return pd.read_csv(f)
                 if field.lower().endswith(".json"):
-                    return pd.read_json(file)
+                    return pd.read_json(f)
                 if field.lower().endswith(".parquet"):
-                    return pd.read_parquet(file)
+                    return pd.read_parquet(f)
     for field in files:
         if field == 'questions.txt':
             continue
-        file = files[field]
+        f = files[field]
         if field.lower().endswith(".csv"):
-            return pd.read_csv(file)
+            return pd.read_csv(f)
         if field.lower().endswith(".json"):
-            return pd.read_json(file)
+            return pd.read_json(f)
         if field.lower().endswith(".parquet"):
-            return pd.read_parquet(file)
+            return pd.read_parquet(f)
     return None
 
 def fig_to_base64(fig):
@@ -62,19 +60,19 @@ def handle_api():
     questions_text = request.files['questions.txt'].read().decode()
     prompt = questions_text.lower()
 
-    # NETWORK TEST
+    # NETWORK EVAL
     if 'edge_count' in prompt and 'degree_histogram' in prompt:
         df = load_input_file(request.files, 'edges.csv')
         if df is None:
-            return jsonify({"error":"Missing edges.csv file."})
+            return jsonify({"error": "Missing edges.csv file."})
         G = nx.Graph()
+        # Accept either source,target or unnamed columns
         if list(df.columns) == [0,1] or not all(col in df.columns for col in ['source','target']):
             for a,b in df.values:
                 G.add_edge(str(a), str(b))
         else:
             for a,b in zip(df['source'], df['target']):
                 G.add_edge(str(a), str(b))
-        nodes = list(G.nodes())
         degrees = dict(G.degree())
         edge_count = G.number_of_edges()
         avg_deg = np.mean(list(degrees.values()))
@@ -86,8 +84,7 @@ def handle_api():
             sp_alice_eve = -1
         fig1 = plt.figure(figsize=(4,4))
         pos = nx.spring_layout(G, seed=42)
-        nx.draw(G, pos, with_labels=True, node_color='skyblue', 
-                edge_color='gray', font_size=10)
+        nx.draw(G, pos, with_labels=True, node_color='skyblue', edge_color='gray', font_size=10)
         network_graph_b64 = fig_to_base64(fig1)
         fig2 = plt.figure()
         values, counts = np.unique(list(degrees.values()), return_counts=True)
@@ -107,18 +104,12 @@ def handle_api():
             "degree_histogram": degree_hist_b64
         })
 
-    # SALES TEST
+    # SALES EVAL
     if 'total_sales' in prompt and 'top_region' in prompt and 'bar_chart' in prompt:
         df = load_input_file(request.files, 'sample-sales.csv')
         if df is None:
             return jsonify({'error': "Missing sales CSV."})
-        sales_col = None
-        for c in df.columns:
-            if 'sales' in c.lower():
-                sales_col = c
-                break
-        if sales_col is None:
-            return jsonify({'error': "Could not find sales column."})
+        sales_col = next((c for c in df.columns if 'sales' in c.lower()), df.columns[-1])
         total_sales = df[sales_col].sum()
         region_col = next((c for c in df.columns if 'region' in c.lower()), df.columns[0])
         top_region = df.groupby(region_col)[sales_col].sum().idxmax()
@@ -166,7 +157,7 @@ def handle_api():
             "cumulative_sales_chart": cumulative_chart_b64
         })
 
-    # WEATHER TEST
+    # WEATHER EVAL
     if 'average_temp_c' in prompt and 'precip_histogram' in prompt:
         df = load_input_file(request.files, 'weather.csv')
         if df is None:
@@ -221,89 +212,9 @@ def handle_api():
             "precip_histogram": precip_hist_b64
         })
 
-    # FALLBACK
-    url = re.search(r'https?://[^\s]+', questions_text)
-    df = None
-    if url:
-        try:
-            dfs = pd.read_html(url.group(0))
-            if dfs:
-                df = dfs[0]
-        except Exception:
-            pass
-    if df is not None and not (hasattr(df, "empty") and df.empty):
-        questions = [q.strip() for q in re.split(r'[\n\.]+', questions_text) if q.strip()]
-        answers = []
-        for q in questions:
-            q_lower = q.lower()
-            if "correlation" in q_lower:
-                answers.append(correlation_answer(df))
-            elif "regression slope" in q_lower or ("regression" in q_lower and "slope" in q_lower):
-                answers.append(regression_slope(df))
-            elif "plot" in q_lower or "scatterplot" in q_lower:
-                answers.append(plot_scatter_with_regression(df))
-            elif "count" in q_lower:
-                answers.append(str(len(df)))
-            else:
-                answers.append("Cannot answer")
-        return jsonify(answers)
-
+    # FALLBACK CASE (no recognized prompt)
     return jsonify({"error": "No valid analysis scenario detected or missing necessary files."})
 
-# Helper functions for fallback legacy
-def get_numeric_cols(df):
-    return df.select_dtypes(include=[np.number]).columns.tolist()
-
-def correlation_answer(df):
-    cols = get_numeric_cols(df)
-    if len(cols) < 2:
-        return "NaN"
-    corr = df[cols[0]].corr(df[cols[1]])
-    if pd.isna(corr):
-        return "NaN"
-    return round(float(corr), 6)
-
-def regression_slope(df):
-    from sklearn.linear_model import LinearRegression
-    cols = get_numeric_cols(df)
-    if len(cols) < 2:
-        return "NaN"
-    df_clean = df[[cols[0], cols[1]]].dropna()
-    if df_clean.empty:
-        return "NaN"
-    try:
-        model = LinearRegression()
-        X = df_clean[cols].values.reshape(-1, 1)
-        y = df_clean[cols[1]].values
-        model.fit(X, y)
-        return round(float(model.coef_), 6)
-    except Exception:
-        return "NaN"
-
-def plot_scatter_with_regression(df):
-    cols = get_numeric_cols(df)
-    if len(cols) < 2:
-        return "No plot data"
-    df_clean = df[[cols[0], cols[1]]].dropna()
-    if df_clean.empty:
-        return "No plot data"
-    fig, ax = plt.subplots()
-    sns.scatterplot(x=cols, y=cols[1], data=df_clean, ax=ax)
-    sns.regplot(x=cols, y=cols[1], data=df_clean, scatter=False, color='red', ax=ax, line_kws={"linestyle": "dotted"})
-    ax.set_xlabel(cols)
-    ax.set_ylabel(cols[1])
-    plt.tight_layout()
-    img_bytes = io.BytesIO()
-    plt.savefig(img_bytes, format='png', dpi=100)
-    plt.close(fig)
-    img_bytes.seek(0)
-    img_b64 = base64.b64encode(img_bytes.read()).decode()
-    uri = f"data:image/png;base64,{img_b64}"
-    if len(uri) > 100000:
-        return "Plot too large"
-    return uri
-
 if __name__ == "__main__":
-    # Always use the port given by the host environment
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
